@@ -58,10 +58,41 @@ const mongoOptions = {
   ...(process.env.MONGODB_DB ? { dbName: process.env.MONGODB_DB } : {}),
 };
 
+function connectRedisClient(client) {
+  if (client.status === 'ready' || client.status === 'connect') return Promise.resolve();
+  if (client.status === 'connecting') {
+    return new Promise((resolve, reject) => {
+      const handleReady = () => {
+        cleanup();
+        resolve();
+      };
+      const handleError = (error) => {
+        cleanup();
+        reject(error);
+      };
+      const cleanup = () => {
+        client.removeListener('ready', handleReady);
+        client.removeListener('error', handleError);
+      };
+      client.once('ready', handleReady);
+      client.once('error', handleError);
+      if (client.status === 'ready') handleReady();
+    });
+  }
+  return client.connect();
+}
+
 function connectRedis() {
   if (!redis) return Promise.resolve();
   if (!redisConnectionPromise) {
-    redisConnectionPromise = Promise.all([redis.connect(), redisPub.connect(), redisSub.connect()]);
+    redisConnectionPromise = Promise.all([
+      connectRedisClient(redis),
+      connectRedisClient(redisPub),
+      connectRedisClient(redisSub),
+    ]).catch((error) => {
+      redisConnectionPromise = null;
+      throw error;
+    });
   }
   return redisConnectionPromise;
 }
