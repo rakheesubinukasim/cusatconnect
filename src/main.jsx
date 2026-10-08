@@ -11,6 +11,7 @@ import {
   Info,
   LockKeyhole,
   Mic,
+  MessageCircle,
   MoreHorizontal,
   PhoneOff,
   Radio,
@@ -430,13 +431,14 @@ function App() {
   };
 
   const startMatching = async (nameOverride = displayName, ownerNamePassword = '') => {
-    const ownerName = isReservedDisplayName(nameOverride);
-    if (!nameOverride.trim() || (ownerName && !ownerNamePassword)) {
+    const safeName = typeof nameOverride === 'string' ? nameOverride.trim() : '';
+    const ownerName = isReservedDisplayName(safeName);
+    if (!safeName || (ownerName && !ownerNamePassword)) {
       setShowNamePrompt(true);
       return;
     }
-    setDisplayName(nameOverride.trim());
-    localStorage.setItem('cucek_display_name', nameOverride.trim());
+    setDisplayName(safeName);
+    localStorage.setItem('cucek_display_name', safeName);
     setPermissionMessage('');
     setIsMatching(true);
     setIsConnected(false);
