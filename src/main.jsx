@@ -472,7 +472,7 @@ function App() {
   };
 
   const startMatching = async (nameOverride = displayName, ownerNamePassword = '') => {
-    if (isMatching || isConnected || matchingAttemptRef.current) {
+    if (isMatching || isConnected) {
       setPermissionMessage(isConnected ? 'You are already in a call.' : 'Matching is already in progress.');
       return;
     }
