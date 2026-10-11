@@ -21,7 +21,8 @@ const allowedOrigins = CLIENT_ORIGIN.split(',').map((origin) => origin.trim()).f
 const allowedOriginSet = new Set(allowedOrigins);
 const isLocalOrigin = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin);
 const JWT_SECRET = process.env.JWT_SECRET || 'local-development-secret-change-me';
-const OWNER_DISPLAY_NAME = 'rakheesubinukasim';
+const OWNER_DISPLAY_NAME = 'Rakheesubinu Kasim';
+const OWNER_USERNAME = OWNER_DISPLAY_NAME.toLowerCase().replace(/\s+/g, '');
 const MINIMUM_RESERVED_NAME_LENGTH = 'rakhee'.length;
 const OWNER_NAME_PASSWORD = process.env.OWNER_NAME_PASSWORD;
 const redisEnabled = Boolean(process.env.REDIS_URL);
@@ -105,7 +106,10 @@ async function getIceServers() {
   return fallbackIceServers;
 }
 
-const anonymousAuthSchema = z.object({ displayName: z.string().trim().min(1).max(32).optional() }).strict();
+const anonymousAuthSchema = z.object({
+  displayName: z.string().trim().min(1).max(32),
+  ownerNamePassword: z.string().max(128),
+}).strict();
 const reportInputSchema = z.object({ sessionId: z.string().max(100).optional(), reason: z.string().trim().min(3).max(500) }).strict();
 const queueInputSchema = z.object({
   interest: z.string().trim().min(1).max(40),
@@ -114,11 +118,15 @@ const queueInputSchema = z.object({
   location: z.object({ latitude: z.number().finite(), longitude: z.number().finite() }).strict(),
 }).strict();
 
-function issueToken() {
+function isAllowedUsername(displayName) {
+  return displayName.trim().toLowerCase().replace(/\s+/g, '') === OWNER_USERNAME;
+}
+
+function issueToken(displayName) {
   const userId = randomUUID();
-  const token = jwt.sign({ sub: userId, role: 'student' }, JWT_SECRET, { expiresIn: '12h' });
+  const token = jwt.sign({ sub: userId, username: OWNER_USERNAME, role: 'admin' }, JWT_SECRET, { expiresIn: '12h' });
   if (redis) redis.set(`session:${userId}`, 'active', 'EX', 43200).catch(() => {});
-  return { userId, token };
+  return { userId, token, displayName };
 }
 
 function verifyToken(token) {
@@ -130,6 +138,9 @@ function requireAuth(request, response, next) {
   if (!token) return response.status(401).json({ error: 'Bearer token required' });
   try {
     request.user = verifyToken(token);
+    if (request.user.username !== OWNER_USERNAME) {
+      return response.status(403).json({ error: 'This website is restricted to the owner username.' });
+    }
     next();
   } catch {
     return response.status(401).json({ error: 'Invalid or expired token' });
@@ -146,7 +157,7 @@ const Report = mongoose.models.Report || mongoose.model('Report', reportSchema);
 
 function isReservedDisplayName(displayName) {
   const normalizedName = displayName.trim().toLowerCase().replace(/\s+/g, '');
-  return normalizedName.length >= MINIMUM_RESERVED_NAME_LENGTH && OWNER_DISPLAY_NAME.startsWith(normalizedName);
+  return normalizedName.length >= MINIMUM_RESERVED_NAME_LENGTH && OWNER_USERNAME.startsWith(normalizedName);
 }
 
 function hasOwnerAccess(displayName, ownerNamePassword) {
@@ -298,8 +309,13 @@ app.get('/api/health', (_request, response) => response.json({ ok: true, service
 app.post('/api/auth/anonymous', (request, response) => {
   const result = anonymousAuthSchema.safeParse(request.body || {});
   if (!result.success) return response.status(400).json({ error: 'Invalid anonymous profile', details: result.error.flatten() });
-  const session = issueToken();
-  response.status(201).json({ ...session, displayName: result.data.displayName || 'Anonymous student', expiresIn: '12h' });
+  if (!OWNER_NAME_PASSWORD
+    || !isAllowedUsername(result.data.displayName)
+    || result.data.ownerNamePassword !== OWNER_NAME_PASSWORD) {
+    return response.status(403).json({ error: 'Only the owner username can access this website.' });
+  }
+  const session = issueToken(OWNER_DISPLAY_NAME);
+  response.status(201).json({ ...session, expiresIn: '12h' });
 });
 app.get('/api/auth/me', requireAuth, (request, response) => response.json({ userId: request.user.sub, role: request.user.role }));
 app.get('/api/webrtc-config', requireAuth, async (_request, response) => response.json({ iceServers: await getIceServers() }));
@@ -330,6 +346,7 @@ io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Authentication required'));
     socket.user = verifyToken(token);
+    if (socket.user.username !== OWNER_USERNAME) return next(new Error('Owner access required'));
     next();
   } catch {
     next(new Error('Invalid or expired token'));
@@ -348,9 +365,8 @@ io.on('connection', (socket) => {
       return;
     }
     const { interest, displayName, location } = result.data;
-    const ownerAccess = hasOwnerAccess(displayName, result.data.ownerNamePassword);
-    if (isReservedDisplayName(displayName) && !ownerAccess) {
-      socket.emit('match-error', { message: 'That name is reserved. Enter the owner password to use it.' });
+    if (!isAllowedUsername(displayName) || !hasOwnerAccess(displayName, result.data.ownerNamePassword)) {
+      socket.emit('match-error', { message: 'Only the owner username can access this website.' });
       return;
     }
     const campus = nearestCampus(location);
@@ -359,7 +375,7 @@ io.on('connection', (socket) => {
       return;
     }
     await removeFromQueue(socket.id);
-    socket.data.role = ownerAccess ? 'admin' : 'student';
+    socket.data.role = 'admin';
     const candidate = await takeCandidate(interest, socket.id);
     if (!candidate) {
       await addToQueue({ socketId: socket.id, interest, displayName, campus: campus.name });

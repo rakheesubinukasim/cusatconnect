@@ -13,7 +13,7 @@ The development command is safe to run again while the app is already running; i
 
 For a single-server deployment, run `npm start`. This builds the React app and serves the frontend, API, and Socket.IO signaling server from `PORT` (default `4000`). Set `CLIENT_ORIGIN` to the public HTTPS origin and configure the deployment platform to run `npm start`.
 
-The display name `Rakheesubinu Kasim` is reserved on the server and requires the private `OWNER_NAME_PASSWORD` value from `.env`. Set a strong secret before sharing a deployment.
+Access is restricted to the username `Rakheesubinu Kasim`. The server requires the private `OWNER_NAME_PASSWORD` value from `.env` when issuing a session token, and binds every API and Socket.IO session to that username. Set a strong password before sharing a deployment.
 
 Camera, microphone, and geolocation require `localhost` or HTTPS. The server validates that users are within 15 km of either CUCEK or CUSAT.
 

@@ -212,12 +212,12 @@ function App() {
     }
   };
 
-  const loadIceServers = async () => {
+  const loadIceServers = async (ownerNamePassword) => {
     try {
-      let token = await getAnonymousToken();
+      let token = await getAnonymousToken(ownerNamePassword);
       let response = await fetch('/api/webrtc-config', { headers: { Authorization: `Bearer ${token}` } });
-      if (response.status === 401) {
-        token = await getAnonymousToken(true);
+      if (response.status === 401 || response.status === 403) {
+        token = await getAnonymousToken(ownerNamePassword, true);
         response = await fetch('/api/webrtc-config', { headers: { Authorization: `Bearer ${token}` } });
       }
       if (!response.ok) throw new Error(`ICE configuration returned ${response.status}`);
@@ -320,7 +320,7 @@ function App() {
     }
   };
 
-  const getAnonymousToken = async (forceRefresh = false) => {
+  const getAnonymousToken = async (ownerNamePassword, forceRefresh = false) => {
     if (forceRefresh) {
       tokenRef.current = null;
       localStorage.removeItem('cucek_token');
@@ -328,11 +328,18 @@ function App() {
     if (tokenRef.current) return tokenRef.current;
     let response;
     try {
-      response = await fetch('/api/auth/anonymous', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      response = await fetch('/api/auth/anonymous', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName, ownerNamePassword }),
+      });
     } catch {
       throw new Error('The session service is unavailable. Start the API server with "npm run server" and try again.');
     }
-    if (!response.ok) throw new Error('The session service rejected the request. Please try again.');
+    if (!response.ok) {
+      if (response.status === 403) throw new Error('Only Rakheesubinu Kasim can access this website.');
+      throw new Error('The session service rejected the request. Please try again.');
+    }
     const data = await response.json();
     tokenRef.current = data.token;
     localStorage.setItem('cucek_token', data.token);
@@ -340,8 +347,8 @@ function App() {
   };
 
   const connectToQueue = async (ownerNamePassword = '', retryAuth = true) => {
-    const token = await getAnonymousToken();
-    await loadIceServers();
+    const token = await getAnonymousToken(ownerNamePassword);
+    await loadIceServers(ownerNamePassword);
     const socket = io({ auth: { token } });
     socketRef.current = socket;
     socket.on('signal', handleSignal);
@@ -433,7 +440,7 @@ function App() {
   const startMatching = async (nameOverride = displayName, ownerNamePassword = '') => {
     const safeName = typeof nameOverride === 'string' ? nameOverride.trim() : '';
     const ownerName = isReservedDisplayName(safeName);
-    if (!safeName || (ownerName && !ownerNamePassword)) {
+    if (!safeName || !ownerName || !ownerNamePassword) {
       setShowNamePrompt(true);
       return;
     }
@@ -481,8 +488,10 @@ function App() {
     if (editingName) {
       setDisplayName(name);
       localStorage.setItem('cucek_display_name', name);
+      tokenRef.current = null;
+      localStorage.removeItem('cucek_token');
       setEditingName(false);
-      setPermissionMessage('Username updated. It will be shown on your next connection.');
+      setPermissionMessage('Only Rakheesubinu Kasim can access this website.');
       return;
     }
     startMatching(name, password);
@@ -646,7 +655,7 @@ function App() {
       </section>
 
       <footer className="footer-bar"><span>CUSAT Connect <b>·</b> Built for the campus community</span><span className="footer-links"><button>Community guidelines</button><button>Privacy</button><button>Feedback</button></span></footer>
-      {showNamePrompt && <div className="modal-backdrop"><form className="name-modal" onSubmit={confirmName}><div className="modal-icon"><MessageCircle size={23} /></div><h2>{editingName ? 'Change your username' : 'Choose your name'}</h2><p>{editingName ? 'Update the name shown on your profile label. This change applies to your next connection.' : 'This is the name the other student will see. You can use a nickname.'}</p><label htmlFor="display-name">Your name</label><input key={editingName ? 'edit-name' : 'new-name'} id="display-name" name="displayName" defaultValue={displayName} autoFocus maxLength={32} required placeholder="e.g. Anu" /><label htmlFor="owner-name-password">Owner password (for names starting with Rakhee)</label><input id="owner-name-password" name="ownerNamePassword" type="password" inputMode="numeric" maxLength={128} placeholder="Only needed for an owner name" /><button className="primary-button modal-button" type="submit">{editingName ? 'Save username' : 'Continue to matching'} {editingName ? <Check size={17} /> : <ArrowRight size={17} />}</button></form></div>}
+      {showNamePrompt && <div className="modal-backdrop"><form className="name-modal" onSubmit={confirmName}><div className="modal-icon"><LockKeyhole size={23} /></div><h2>{editingName ? 'Confirm owner username' : 'Owner access required'}</h2><p>Only Rakheesubinu Kasim can access this website.</p><label htmlFor="display-name">Username</label><input key={editingName ? 'edit-name' : 'new-name'} id="display-name" name="displayName" defaultValue={displayName} autoFocus maxLength={32} required placeholder="Rakheesubinu Kasim" /><label htmlFor="owner-name-password">Owner password</label><input id="owner-name-password" name="ownerNamePassword" type="password" maxLength={128} required placeholder="Enter the owner password" /><button className="primary-button modal-button" type="submit">{editingName ? 'Confirm username' : 'Continue to website'} {editingName ? <Check size={17} /> : <ArrowRight size={17} />}</button></form></div>}
       {showSafety && <div className="modal-backdrop" onClick={() => setShowSafety(false)}><div className="safety-modal" onClick={(event) => event.stopPropagation()}><button className="close-modal" onClick={() => setShowSafety(false)} aria-label="Close"><X size={18} /></button><div className="modal-icon"><ShieldCheck size={23} /></div><h2>Designed for a safer campus</h2><p>Every session stays anonymous by default. Automated safety signals watch for harmful content, while quick report and skip controls keep you in charge.</p><div className="modal-rule"><Check size={16} /> Open matching for everyone</div><div className="modal-rule"><Check size={16} /> No recording by default</div><div className="modal-rule"><Check size={16} /> Fast human review path</div><button className="primary-button modal-button" onClick={() => setShowSafety(false)}>Got it</button></div></div>}
     </main>
   );
