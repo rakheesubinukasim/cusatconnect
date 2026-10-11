@@ -615,8 +615,10 @@ function App() {
             <small>Student-only conversations</small>
           </div>
         </div>
-        <div className="online-status"><span className="status-dot" /> {onlineCount || '...'} online</div>
-        <div className="nav-status"><span className={`status-dot ${locationState}`} /> {locationState === 'cusat' ? 'CUSAT area' : locationState === 'cucek' ? 'CUCEK area' : 'CUCEK/CUSAT area'} <ChevronDown size={15} /></div>
+        <div className="topbar-meta" aria-label="Connection and location status">
+          <div className="online-status"><span className="status-dot" /> <span>{onlineCount || '...'} online</span></div>
+          <div className="nav-status"><span className={`status-dot ${locationState}`} /> <span>{locationState === 'owner' ? 'Anywhere' : locationState === 'cusat' ? 'CUSAT area' : locationState === 'cucek' ? 'CUCEK area' : 'CUCEK/CUSAT area'}</span> <ChevronDown size={15} /></div>
+        </div>
         <button className="user-name-button" onClick={openNameEditor} aria-label={displayName ? `Change username, currently ${displayName}` : 'Set username'} title="Change username"><UserRound size={15} /><span>{displayName || 'Set username'}</span></button>
         <button className="icon-button" aria-label="Help" title="Help"><CircleHelp size={20} /></button>
       </nav>
