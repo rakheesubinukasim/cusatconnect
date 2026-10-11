@@ -365,7 +365,12 @@ function App() {
     socket.on('online-count', (count) => {
       if (isCurrentSocket()) setOnlineCount(count);
     });
-    const joinQueue = () => socket.emit('join-queue', { interest, displayName: displayNameOverride, ownerNamePassword, location: locationRef.current });
+    const joinQueue = () => socket.emit('join-queue', {
+      interest,
+      displayName: displayNameOverride,
+      ownerNamePassword,
+      ...(locationRef.current ? { location: locationRef.current } : {}),
+    });
     const connectionTimeout = window.setTimeout(() => {
       if (isCurrentSocket() && !socket.connected) {
         socket.disconnect();
