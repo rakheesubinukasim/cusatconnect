@@ -28,6 +28,8 @@ const redisEnabled = Boolean(process.env.REDIS_URL);
 const MATCH_DURATION_MS = 3 * 60 * 1000;
 const CAMPUS_RADIUS_KM = 10;
 const MATCHING_INTERESTS = ['Tech talk', 'Music', 'Campus life', 'Gaming', 'Projects'];
+const queueInterestsKey = 'cucek:queue-interests';
+const ownerQueueKey = 'cucek:owner-queue';
 const CAMPUSES = [
   { name: 'CUCEK', latitude: 9.4605554, longitude: 76.4373625 },
   { name: 'CUSAT', latitude: 10.0442634, longitude: 76.3278684 },
@@ -184,6 +186,7 @@ function removeFromQueue(socketId) {
   }
   return redis.hgetall(`cucek:queue-user:${socketId}`).then(async (user) => {
     if (user.interest) await redis.zrem(`cucek:queue:${user.interest}`, socketId);
+    await redis.zrem(ownerQueueKey, socketId);
     await redis.del(`cucek:queue-user:${socketId}`);
   });
 }
@@ -219,9 +222,37 @@ async function takeCandidate(interest, socketId) {
   for (const candidateId of candidateIds) {
     if (candidateId === socketId) continue;
     if (!(await redis.zrem(`cucek:queue:${interest}`, candidateId))) continue;
+    await redis.zrem(ownerQueueKey, candidateId);
     const candidate = await redis.hgetall(`cucek:queue-user:${candidateId}`);
     await redis.del(`cucek:queue-user:${candidateId}`);
     if (candidate.socketId) return candidate;
+  }
+  return null;
+}
+
+async function takeOwnerCandidate(socketId) {
+  if (!redis) return null;
+  const candidateIds = await redis.zrange(ownerQueueKey, 0, 20);
+  for (const candidateId of candidateIds) {
+    if (candidateId === socketId) continue;
+    if (!(await redis.zrem(ownerQueueKey, candidateId))) continue;
+    const candidate = await redis.hgetall(`cucek:queue-user:${candidateId}`);
+    if (candidate.interest) await redis.zrem(`cucek:queue:${candidate.interest}`, candidateId);
+    await redis.del(`cucek:queue-user:${candidateId}`);
+    if (candidate.socketId) return candidate;
+  }
+  return null;
+}
+
+async function takeAnyCandidate(socketId) {
+  if (!redis) {
+    const candidateIndex = waitingUsers.findIndex((user) => user.socketId !== socketId);
+    return candidateIndex >= 0 ? waitingUsers.splice(candidateIndex, 1)[0] : null;
+  }
+  const interests = await redis.smembers(queueInterestsKey);
+  for (const interest of interests) {
+    const candidate = await takeCandidate(interest, socketId);
+    if (candidate) return candidate;
   }
   return null;
 }
@@ -231,8 +262,10 @@ async function addToQueue(user) {
     waitingUsers.push(user);
     return;
   }
+  await redis.sadd(queueInterestsKey, user.interest);
   await redis.hset(`cucek:queue-user:${user.socketId}`, user);
   await redis.zadd(`cucek:queue:${user.interest}`, Date.now(), user.socketId);
+  if (user.role === 'admin') await redis.zadd(ownerQueueKey, Date.now(), user.socketId);
 }
 
 async function setPair(firstSocketId, secondSocketId) {
@@ -380,9 +413,11 @@ io.on('connection', (socket) => {
     }
     await removeFromQueue(socket.id);
     socket.data.role = ownerAccess ? 'admin' : 'member';
-    const candidate = await takeCandidate(interest, socket.id);
+    const candidate = ownerAccess
+      ? await takeAnyCandidate(socket.id)
+      : (await takeCandidate(interest, socket.id) || await takeOwnerCandidate(socket.id));
     if (!candidate) {
-      await addToQueue({ socketId: socket.id, interest, displayName, campus: campus?.name || 'anywhere' });
+      await addToQueue({ socketId: socket.id, interest, displayName, role: socket.data.role, campus: campus?.name || 'anywhere' });
       socket.emit('queue-joined');
       return;
     }

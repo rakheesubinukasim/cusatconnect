@@ -212,12 +212,12 @@ function App() {
     }
   };
 
-  const loadIceServers = async (ownerNamePassword) => {
+  const loadIceServers = async (ownerNamePassword, displayNameOverride = displayName) => {
     try {
-      let token = await getAnonymousToken(ownerNamePassword);
+      let token = await getAnonymousToken(ownerNamePassword, false, displayNameOverride);
       let response = await fetch('/api/webrtc-config', { headers: { Authorization: `Bearer ${token}` } });
       if (response.status === 401 || response.status === 403) {
-        token = await getAnonymousToken(ownerNamePassword, true);
+        token = await getAnonymousToken(ownerNamePassword, true, displayNameOverride);
         response = await fetch('/api/webrtc-config', { headers: { Authorization: `Bearer ${token}` } });
       }
       if (!response.ok) throw new Error(`ICE configuration returned ${response.status}`);
@@ -320,7 +320,7 @@ function App() {
     }
   };
 
-  const getAnonymousToken = async (ownerNamePassword, forceRefresh = false) => {
+  const getAnonymousToken = async (ownerNamePassword, forceRefresh = false, displayNameOverride = displayName) => {
     if (forceRefresh) {
       tokenRef.current = null;
       localStorage.removeItem('cucek_token');
@@ -331,7 +331,7 @@ function App() {
       response = await fetch('/api/auth/anonymous', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ displayName, ownerNamePassword }),
+        body: JSON.stringify({ displayName: displayNameOverride, ownerNamePassword }),
       });
     } catch {
       throw new Error('The session service is unavailable. Start the API server with "npm run server" and try again.');
@@ -346,9 +346,9 @@ function App() {
     return data.token;
   };
 
-  const connectToQueue = async (ownerNamePassword = '', retryAuth = true) => {
-    const token = await getAnonymousToken(ownerNamePassword);
-    await loadIceServers(ownerNamePassword);
+  const connectToQueue = async (ownerNamePassword = '', retryAuth = true, displayNameOverride = displayName) => {
+    const token = await getAnonymousToken(ownerNamePassword, false, displayNameOverride);
+    await loadIceServers(ownerNamePassword, displayNameOverride);
     const interest = interests.includes(selectedInterest) ? selectedInterest : interests[0];
     if (interest !== selectedInterest) setSelectedInterest(interest);
     if (socketRef.current) {
@@ -365,7 +365,7 @@ function App() {
     socket.on('online-count', (count) => {
       if (isCurrentSocket()) setOnlineCount(count);
     });
-    const joinQueue = () => socket.emit('join-queue', { interest, displayName, ownerNamePassword, location: locationRef.current });
+    const joinQueue = () => socket.emit('join-queue', { interest, displayName: displayNameOverride, ownerNamePassword, location: locationRef.current });
     const connectionTimeout = window.setTimeout(() => {
       if (isCurrentSocket() && !socket.connected) {
         socket.disconnect();
@@ -390,7 +390,7 @@ function App() {
           setPermissionMessage('Refreshing your session and reconnecting...');
           socket.disconnect();
           clearSocketRef();
-          connectToQueue(ownerNamePassword, false).catch((retryError) => {
+          connectToQueue(ownerNamePassword, false, displayNameOverride).catch((retryError) => {
             setIsMatching(false);
             setPermissionMessage(retryError.message);
           });
@@ -516,7 +516,7 @@ function App() {
     try {
       if (matchingAttemptRef.current !== attemptId) return;
       setPermissionMessage('Connecting to live matching...');
-      await connectToQueue(resolvedOwnerPassword);
+      await connectToQueue(resolvedOwnerPassword, true, safeName);
     } catch (error) {
       if (matchingAttemptRef.current === attemptId) {
         setIsMatching(false);
