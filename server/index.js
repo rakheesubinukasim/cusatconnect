@@ -27,6 +27,7 @@ const OWNER_NAME_PASSWORD = process.env.OWNER_NAME_PASSWORD;
 const redisEnabled = Boolean(process.env.REDIS_URL);
 const MATCH_DURATION_MS = 3 * 60 * 1000;
 const CAMPUS_RADIUS_KM = 10;
+const MATCHING_INTERESTS = ['Tech talk', 'Music', 'Campus life', 'Gaming', 'Projects'];
 const CAMPUSES = [
   { name: 'CUCEK', latitude: 9.4605554, longitude: 76.4373625 },
   { name: 'CUSAT', latitude: 10.0442634, longitude: 76.3278684 },
@@ -111,7 +112,7 @@ const anonymousAuthSchema = z.object({
 }).strict();
 const reportInputSchema = z.object({ sessionId: z.string().max(100).optional(), reason: z.string().trim().min(3).max(500) }).strict();
 const queueInputSchema = z.object({
-  interest: z.string().trim().min(1).max(40),
+  interest: z.enum(MATCHING_INTERESTS),
   displayName: z.string().trim().min(1).max(32),
   ownerNamePassword: z.string().max(128).optional(),
   location: z.object({ latitude: z.number().finite(), longitude: z.number().finite() }).strict().optional(),

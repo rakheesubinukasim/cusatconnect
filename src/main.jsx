@@ -114,6 +114,8 @@ function App() {
   const remoteStreamRef = useRef(null);
   const signalQueueRef = useRef(Promise.resolve());
   const locationRef = useRef(null);
+  const ownerNamePasswordRef = useRef('');
+  const matchingAttemptRef = useRef(0);
 
   useEffect(() => () => {
     socketRef.current?.disconnect();
@@ -347,24 +349,39 @@ function App() {
   const connectToQueue = async (ownerNamePassword = '', retryAuth = true) => {
     const token = await getAnonymousToken(ownerNamePassword);
     await loadIceServers(ownerNamePassword);
+    const interest = interests.includes(selectedInterest) ? selectedInterest : interests[0];
+    if (interest !== selectedInterest) setSelectedInterest(interest);
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
     const socket = io({ auth: { token } });
     socketRef.current = socket;
+    const isCurrentSocket = () => socketRef.current === socket;
+    const clearSocketRef = () => {
+      if (socketRef.current === socket) socketRef.current = null;
+    };
     socket.on('signal', handleSignal);
-    socket.on('online-count', (count) => setOnlineCount(count));
-    const joinQueue = () => socket.emit('join-queue', { interest: selectedInterest, displayName, ownerNamePassword, location: locationRef.current });
+    socket.on('online-count', (count) => {
+      if (isCurrentSocket()) setOnlineCount(count);
+    });
+    const joinQueue = () => socket.emit('join-queue', { interest, displayName, ownerNamePassword, location: locationRef.current });
     const connectionTimeout = window.setTimeout(() => {
-      if (!socket.connected) {
+      if (isCurrentSocket() && !socket.connected) {
         socket.disconnect();
+        clearSocketRef();
         setIsMatching(false);
         setPermissionMessage('The matching service took too long to respond. Please try again.');
       }
     }, 10000);
     const clearConnectionTimeout = () => window.clearTimeout(connectionTimeout);
     socket.once('connect', () => {
+      if (!isCurrentSocket()) return;
       clearConnectionTimeout();
       joinQueue();
     });
     socket.on('connect_error', (error) => {
+      if (!isCurrentSocket()) return;
       clearConnectionTimeout();
       if (/invalid|expired/i.test(error.message || '')) {
         tokenRef.current = null;
@@ -372,6 +389,7 @@ function App() {
         if (retryAuth) {
           setPermissionMessage('Refreshing your session and reconnecting...');
           socket.disconnect();
+          clearSocketRef();
           connectToQueue(ownerNamePassword, false).catch((retryError) => {
             setIsMatching(false);
             setPermissionMessage(retryError.message);
@@ -380,10 +398,12 @@ function App() {
         }
       }
       socket.disconnect();
+      clearSocketRef();
       setIsMatching(false);
       setPermissionMessage('The matching service could not connect. Check that the server is running, then try again.');
     });
     socket.on('match-found', async ({ peerId, initiator, partnerName: matchedName }) => {
+      if (!isCurrentSocket()) return;
       clearConnectionTimeout();
       peerIdRef.current = peerId;
       initiatorRef.current = initiator;
@@ -397,12 +417,19 @@ function App() {
         setPermissionMessage(error.message);
       }
     });
-    socket.once('queue-joined', clearConnectionTimeout);
+    socket.once('queue-joined', () => {
+      if (isCurrentSocket()) clearConnectionTimeout();
+    });
     socket.on('match-error', ({ message }) => {
+      if (!isCurrentSocket()) return;
+      clearConnectionTimeout();
       setIsMatching(false);
       setPermissionMessage(message);
+      socket.disconnect();
+      clearSocketRef();
     });
     socket.on('peer-left', () => {
+      if (!isCurrentSocket()) return;
       peerConnectionRef.current?.close();
       peerConnectionRef.current = null;
       peerIdRef.current = null;
@@ -411,14 +438,18 @@ function App() {
       pendingSignalsRef.current = [];
       setIsConnected(false);
       setPermissionMessage('Your partner left the call. You can find another connection.');
+      socket.disconnect();
+      clearSocketRef();
     });
     socket.on('match-expired', () => {
+      if (!isCurrentSocket()) return;
       setPermissionMessage('Three minutes are up. Finding your next connection...');
       nextPerson();
     });
   };
 
   const stopCall = () => {
+    matchingAttemptRef.current += 1;
     socketRef.current?.emit('leave-call');
     socketRef.current?.disconnect();
     socketRef.current = null;
@@ -436,16 +467,29 @@ function App() {
   };
 
   const startMatching = async (nameOverride = displayName, ownerNamePassword = '') => {
+    if (isMatching || isConnected || matchingAttemptRef.current) {
+      setPermissionMessage(isConnected ? 'You are already in a call.' : 'Matching is already in progress.');
+      return;
+    }
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
     const safeName = typeof nameOverride === 'string' ? nameOverride.trim() : '';
     const ownerName = isOwnerUsername(safeName);
-    if (!safeName || (ownerName && !ownerNamePassword)) {
+    const resolvedOwnerPassword = ownerNamePassword || ownerNamePasswordRef.current || '';
+    if (!safeName || (ownerName && !resolvedOwnerPassword)) {
       setShowNamePrompt(true);
       return;
     }
+    const attemptId = matchingAttemptRef.current + 1;
+    matchingAttemptRef.current = attemptId;
     if (safeName !== displayName) {
       tokenRef.current = null;
       localStorage.removeItem('cucek_token');
     }
+    if (ownerName) ownerNamePasswordRef.current = resolvedOwnerPassword;
+    else ownerNamePasswordRef.current = '';
     setDisplayName(safeName);
     localStorage.setItem('cucek_display_name', safeName);
     setPermissionMessage('');
@@ -458,19 +502,28 @@ function App() {
         setPermissionMessage(`Checking your CUCEK/CUSAT location (within ${CAMPUS_RADIUS_KM} km)...`);
         await requestLocation();
       }
+      if (matchingAttemptRef.current !== attemptId) return;
       setPermissionMessage('Requesting camera and microphone access...');
       await requestMedia();
     } catch (error) {
-      setIsMatching(false);
-      setPermissionMessage(error.message);
+      if (matchingAttemptRef.current === attemptId) {
+        setIsMatching(false);
+        setPermissionMessage(error.message);
+      }
+      if (matchingAttemptRef.current === attemptId) matchingAttemptRef.current = 0;
       return;
     }
     try {
+      if (matchingAttemptRef.current !== attemptId) return;
       setPermissionMessage('Connecting to live matching...');
-      await connectToQueue(ownerNamePassword);
+      await connectToQueue(resolvedOwnerPassword);
     } catch (error) {
-      setIsMatching(false);
-      setPermissionMessage(error.message);
+      if (matchingAttemptRef.current === attemptId) {
+        setIsMatching(false);
+        setPermissionMessage(error.message);
+      }
+    } finally {
+      if (matchingAttemptRef.current === attemptId) matchingAttemptRef.current = 0;
     }
   };
 
@@ -480,6 +533,7 @@ function App() {
   };
 
   const cancelMatching = () => {
+    matchingAttemptRef.current += 1;
     stopCall();
     setPermissionMessage('Matching cancelled. Start again when ready.');
   };
@@ -496,6 +550,7 @@ function App() {
       localStorage.setItem('cucek_display_name', name);
       tokenRef.current = null;
       localStorage.removeItem('cucek_token');
+      ownerNamePasswordRef.current = '';
       setEditingName(false);
       setPermissionMessage('Username updated. Start matching when ready.');
       return;
@@ -631,7 +686,7 @@ function App() {
 
           <div className="privacy-note">
             <LockKeyhole size={18} />
-          <div><strong>Simple, campus-safe access.</strong><span>Use any username. Non-owner users are checked within 10 km of CUCEK or CUSAT; the owner can access from anywhere.</span></div>
+          <div><strong>Simple, campus-safe access.</strong><span>Use any username.users are checked within 10 km of CUCEK or CUSAT;</span></div>
           </div>
 
           <div className="trust-list">
