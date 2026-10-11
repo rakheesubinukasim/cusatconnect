@@ -1,6 +1,6 @@
 # CUSAT Connect
 
-Anonymous video matching with a React frontend, Express/Socket.IO signaling server, WebRTC media, JWT sessions, optional Redis active-session storage, and MongoDB report persistence. Users within 15 km of either CUCEK or CUSAT can join, and each video connection lasts three minutes before the next person is matched automatically.
+Anonymous video matching with a React frontend, Express/Socket.IO signaling server, WebRTC media, JWT sessions, optional Redis active-session storage, and MongoDB report persistence. Users within 10 km of either CUCEK or CUSAT can join, while the owner username can join from anywhere. Each video connection lasts three minutes before the next person is matched automatically.
 
 ## Run locally
 
@@ -13,9 +13,9 @@ The development command is safe to run again while the app is already running; i
 
 For a single-server deployment, run `npm start`. This builds the React app and serves the frontend, API, and Socket.IO signaling server from `PORT` (default `4000`). Set `CLIENT_ORIGIN` to the public HTTPS origin and configure the deployment platform to run `npm start`.
 
-Access is restricted to the username `Rakheesubinu Kasim`. The server requires the private `OWNER_NAME_PASSWORD` value from `.env` when issuing a session token, and binds every API and Socket.IO session to that username. Set a strong password before sharing a deployment.
+Users choose a username when they enter. The exact username `Rakheesubinu Kasim` requires the private `OWNER_NAME_PASSWORD` value from `.env`; other usernames do not need a password but must share browser location and be within 10 km of CUCEK or CUSAT. The server binds every API and Socket.IO session to the authenticated username. Set a strong password before sharing a deployment.
 
-Camera, microphone, and geolocation require `localhost` or HTTPS. The server validates that users are within 15 km of either CUCEK or CUSAT.
+Camera, microphone, and geolocation require `localhost` or HTTPS. The server validates that non-owner users are within 10 km of either CUCEK or CUSAT; owner access bypasses the radius check.
 
 The API issues anonymous 12-hour JWTs at `POST /api/auth/anonymous`. Reports require `Authorization: Bearer <token>`. Socket.IO requires the same token in the handshake auth payload. Redis is optional locally and is used for active-session TTLs when configured.
 

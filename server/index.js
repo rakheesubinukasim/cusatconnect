@@ -23,11 +23,10 @@ const isLocalOrigin = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(
 const JWT_SECRET = process.env.JWT_SECRET || 'local-development-secret-change-me';
 const OWNER_DISPLAY_NAME = 'Rakheesubinu Kasim';
 const OWNER_USERNAME = OWNER_DISPLAY_NAME.toLowerCase().replace(/\s+/g, '');
-const MINIMUM_RESERVED_NAME_LENGTH = 'rakhee'.length;
 const OWNER_NAME_PASSWORD = process.env.OWNER_NAME_PASSWORD;
 const redisEnabled = Boolean(process.env.REDIS_URL);
 const MATCH_DURATION_MS = 3 * 60 * 1000;
-const CAMPUS_RADIUS_KM = 15;
+const CAMPUS_RADIUS_KM = 10;
 const CAMPUSES = [
   { name: 'CUCEK', latitude: 9.4605554, longitude: 76.4373625 },
   { name: 'CUSAT', latitude: 10.0442634, longitude: 76.3278684 },
@@ -108,23 +107,24 @@ async function getIceServers() {
 
 const anonymousAuthSchema = z.object({
   displayName: z.string().trim().min(1).max(32),
-  ownerNamePassword: z.string().max(128),
+  ownerNamePassword: z.string().max(128).optional(),
 }).strict();
 const reportInputSchema = z.object({ sessionId: z.string().max(100).optional(), reason: z.string().trim().min(3).max(500) }).strict();
 const queueInputSchema = z.object({
   interest: z.string().trim().min(1).max(40),
   displayName: z.string().trim().min(1).max(32),
   ownerNamePassword: z.string().max(128).optional(),
-  location: z.object({ latitude: z.number().finite(), longitude: z.number().finite() }).strict(),
+  location: z.object({ latitude: z.number().finite(), longitude: z.number().finite() }).strict().optional(),
 }).strict();
 
-function isAllowedUsername(displayName) {
+function isOwnerUsername(displayName) {
   return displayName.trim().toLowerCase().replace(/\s+/g, '') === OWNER_USERNAME;
 }
 
 function issueToken(displayName) {
   const userId = randomUUID();
-  const token = jwt.sign({ sub: userId, username: OWNER_USERNAME, role: 'admin' }, JWT_SECRET, { expiresIn: '12h' });
+  const username = displayName.trim().toLowerCase().replace(/\s+/g, '');
+  const token = jwt.sign({ sub: userId, username, role: isOwnerUsername(displayName) ? 'admin' : 'member' }, JWT_SECRET, { expiresIn: '12h' });
   if (redis) redis.set(`session:${userId}`, 'active', 'EX', 43200).catch(() => {});
   return { userId, token, displayName };
 }
@@ -138,9 +138,6 @@ function requireAuth(request, response, next) {
   if (!token) return response.status(401).json({ error: 'Bearer token required' });
   try {
     request.user = verifyToken(token);
-    if (request.user.username !== OWNER_USERNAME) {
-      return response.status(403).json({ error: 'This website is restricted to the owner username.' });
-    }
     next();
   } catch {
     return response.status(401).json({ error: 'Invalid or expired token' });
@@ -155,14 +152,9 @@ const reportSchema = new mongoose.Schema({
 }, { versionKey: false });
 const Report = mongoose.models.Report || mongoose.model('Report', reportSchema);
 
-function isReservedDisplayName(displayName) {
-  const normalizedName = displayName.trim().toLowerCase().replace(/\s+/g, '');
-  return normalizedName.length >= MINIMUM_RESERVED_NAME_LENGTH && OWNER_USERNAME.startsWith(normalizedName);
-}
-
 function hasOwnerAccess(displayName, ownerNamePassword) {
   return Boolean(OWNER_NAME_PASSWORD)
-    && isReservedDisplayName(displayName)
+    && isOwnerUsername(displayName)
     && ownerNamePassword === OWNER_NAME_PASSWORD;
 }
 
@@ -309,12 +301,11 @@ app.get('/api/health', (_request, response) => response.json({ ok: true, service
 app.post('/api/auth/anonymous', (request, response) => {
   const result = anonymousAuthSchema.safeParse(request.body || {});
   if (!result.success) return response.status(400).json({ error: 'Invalid anonymous profile', details: result.error.flatten() });
-  if (!OWNER_NAME_PASSWORD
-    || !isAllowedUsername(result.data.displayName)
-    || result.data.ownerNamePassword !== OWNER_NAME_PASSWORD) {
-    return response.status(403).json({ error: 'Only the owner username can access this website.' });
+  if (isOwnerUsername(result.data.displayName)
+    && (!OWNER_NAME_PASSWORD || result.data.ownerNamePassword !== OWNER_NAME_PASSWORD)) {
+    return response.status(403).json({ error: 'The owner username requires the owner password.' });
   }
-  const session = issueToken(OWNER_DISPLAY_NAME);
+  const session = issueToken(result.data.displayName);
   response.status(201).json({ ...session, expiresIn: '12h' });
 });
 app.get('/api/auth/me', requireAuth, (request, response) => response.json({ userId: request.user.sub, role: request.user.role }));
@@ -346,7 +337,6 @@ io.use((socket, next) => {
     const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Authentication required'));
     socket.user = verifyToken(token);
-    if (socket.user.username !== OWNER_USERNAME) return next(new Error('Owner access required'));
     next();
   } catch {
     next(new Error('Invalid or expired token'));
@@ -365,20 +355,33 @@ io.on('connection', (socket) => {
       return;
     }
     const { interest, displayName, location } = result.data;
-    if (!isAllowedUsername(displayName) || !hasOwnerAccess(displayName, result.data.ownerNamePassword)) {
-      socket.emit('match-error', { message: 'Only the owner username can access this website.' });
+    const normalizedDisplayName = displayName.trim().toLowerCase().replace(/\s+/g, '');
+    if (socket.user.username !== normalizedDisplayName) {
+      socket.emit('match-error', { message: 'The username does not match the authenticated session.' });
       return;
     }
-    const campus = nearestCampus(location);
-    if (campus.distance > CAMPUS_RADIUS_KM) {
-      socket.emit('match-error', { message: `You must be within ${CAMPUS_RADIUS_KM} km of CUCEK or CUSAT to match.` });
+    const ownerAccess = isOwnerUsername(displayName) && hasOwnerAccess(displayName, result.data.ownerNamePassword);
+    if (isOwnerUsername(displayName) && !ownerAccess) {
+      socket.emit('match-error', { message: 'The owner username requires the owner password.' });
       return;
+    }
+    let campus = null;
+    if (!ownerAccess) {
+      if (!location) {
+        socket.emit('match-error', { message: 'Location access is required to match.' });
+        return;
+      }
+      campus = nearestCampus(location);
+      if (campus.distance > CAMPUS_RADIUS_KM) {
+        socket.emit('match-error', { message: `You must be within ${CAMPUS_RADIUS_KM} km of CUCEK or CUSAT to match.` });
+        return;
+      }
     }
     await removeFromQueue(socket.id);
-    socket.data.role = 'admin';
+    socket.data.role = ownerAccess ? 'admin' : 'member';
     const candidate = await takeCandidate(interest, socket.id);
     if (!candidate) {
-      await addToQueue({ socketId: socket.id, interest, displayName, campus: campus.name });
+      await addToQueue({ socketId: socket.id, interest, displayName, campus: campus?.name || 'anywhere' });
       socket.emit('queue-joined');
       return;
     }

@@ -30,18 +30,16 @@ import './styles.css';
 
 const interests = ['Tech talk', 'Music', 'Campus life', 'Gaming', 'Projects'];
 const MATCH_DURATION_SECONDS = 3 * 60;
-const CAMPUS_RADIUS_KM = 15;
+const CAMPUS_RADIUS_KM = 10;
 const CAMPUSES = [
   { name: 'CUCEK', latitude: 9.4605554, longitude: 76.4373625 },
   { name: 'CUSAT', latitude: 10.0442634, longitude: 76.3278684 },
 ];
 const OWNER_DISPLAY_NAME = 'rakheesubinukasim';
-const MINIMUM_RESERVED_NAME_LENGTH = 'rakhee'.length;
 const FALLBACK_ICE_SERVERS = [{ urls: 'stun:13.127.200.56:3478' }];
 
-function isReservedDisplayName(name) {
-  const normalizedName = name.trim().toLowerCase().replace(/\s+/g, '');
-  return normalizedName.length >= MINIMUM_RESERVED_NAME_LENGTH && OWNER_DISPLAY_NAME.startsWith(normalizedName);
+function isOwnerUsername(name) {
+  return name.trim().toLowerCase().replace(/\s+/g, '') === OWNER_DISPLAY_NAME;
 }
 
 function distanceInKilometres(first, second) {
@@ -337,7 +335,7 @@ function App() {
       throw new Error('The session service is unavailable. Start the API server with "npm run server" and try again.');
     }
     if (!response.ok) {
-      if (response.status === 403) throw new Error('Only Rakheesubinu Kasim can access this website.');
+      if (response.status === 403) throw new Error('The owner username requires the owner password.');
       throw new Error('The session service rejected the request. Please try again.');
     }
     const data = await response.json();
@@ -439,10 +437,14 @@ function App() {
 
   const startMatching = async (nameOverride = displayName, ownerNamePassword = '') => {
     const safeName = typeof nameOverride === 'string' ? nameOverride.trim() : '';
-    const ownerName = isReservedDisplayName(safeName);
-    if (!safeName || !ownerName || !ownerNamePassword) {
+    const ownerName = isOwnerUsername(safeName);
+    if (!safeName || (ownerName && !ownerNamePassword)) {
       setShowNamePrompt(true);
       return;
+    }
+    if (safeName !== displayName) {
+      tokenRef.current = null;
+      localStorage.removeItem('cucek_token');
     }
     setDisplayName(safeName);
     localStorage.setItem('cucek_display_name', safeName);
@@ -450,8 +452,12 @@ function App() {
     setIsMatching(true);
     setIsConnected(false);
     try {
-      setPermissionMessage('Checking your CUCEK/CUSAT location...');
-      await requestLocation();
+      if (ownerName) {
+        setLocationState('owner');
+      } else {
+        setPermissionMessage(`Checking your CUCEK/CUSAT location (within ${CAMPUS_RADIUS_KM} km)...`);
+        await requestLocation();
+      }
       setPermissionMessage('Requesting camera and microphone access...');
       await requestMedia();
     } catch (error) {
@@ -491,7 +497,7 @@ function App() {
       tokenRef.current = null;
       localStorage.removeItem('cucek_token');
       setEditingName(false);
-      setPermissionMessage('Only Rakheesubinu Kasim can access this website.');
+      setPermissionMessage('Username updated. Start matching when ready.');
       return;
     }
     startMatching(name, password);
@@ -623,7 +629,7 @@ function App() {
 
           <div className="privacy-note">
             <LockKeyhole size={18} />
-            <div><strong>No names. No profiles required.</strong><span>Your identity stays yours until you choose to share it. Location is checked within 15 km of CUCEK or CUSAT.</span></div>
+          <div><strong>Simple, campus-safe access.</strong><span>Use any username. Non-owner users are checked within 10 km of CUCEK or CUSAT; the owner can access from anywhere.</span></div>
           </div>
 
           <div className="trust-list">
@@ -655,7 +661,7 @@ function App() {
       </section>
 
       <footer className="footer-bar"><span>CUSAT Connect <b>·</b> Built for the campus community</span><span className="footer-links"><button>Community guidelines</button><button>Privacy</button><button>Feedback</button></span></footer>
-      {showNamePrompt && <div className="modal-backdrop"><form className="name-modal" onSubmit={confirmName}><div className="modal-icon"><LockKeyhole size={23} /></div><h2>{editingName ? 'Confirm owner username' : 'Owner access required'}</h2><p>Only Rakheesubinu Kasim can access this website.</p><label htmlFor="display-name">Username</label><input key={editingName ? 'edit-name' : 'new-name'} id="display-name" name="displayName" defaultValue={displayName} autoFocus maxLength={32} required placeholder="Rakheesubinu Kasim" /><label htmlFor="owner-name-password">Owner password</label><input id="owner-name-password" name="ownerNamePassword" type="password" maxLength={128} required placeholder="Enter the owner password" /><button className="primary-button modal-button" type="submit">{editingName ? 'Confirm username' : 'Continue to website'} {editingName ? <Check size={17} /> : <ArrowRight size={17} />}</button></form></div>}
+      {showNamePrompt && <div className="modal-backdrop"><form className="name-modal" onSubmit={confirmName}><div className="modal-icon"><UserRound size={23} /></div><h2>{editingName ? 'Change username' : 'Set your username'}</h2><p>Use any username. Only Rakheesubinu Kasim needs a password; other users must allow location access within 10 km of CUCEK or CUSAT.</p><label htmlFor="display-name">Username</label><input key={editingName ? 'edit-name' : 'new-name'} id="display-name" name="displayName" defaultValue={displayName} autoFocus maxLength={32} required placeholder="Your username" /><label htmlFor="owner-name-password">Owner password <span>(only for Rakheesubinu Kasim)</span></label><input id="owner-name-password" name="ownerNamePassword" type="password" maxLength={128} placeholder="Required for owner username" /><button className="primary-button modal-button" type="submit">{editingName ? 'Save username' : 'Continue'} {editingName ? <Check size={17} /> : <ArrowRight size={17} />}</button></form></div>}
       {showSafety && <div className="modal-backdrop" onClick={() => setShowSafety(false)}><div className="safety-modal" onClick={(event) => event.stopPropagation()}><button className="close-modal" onClick={() => setShowSafety(false)} aria-label="Close"><X size={18} /></button><div className="modal-icon"><ShieldCheck size={23} /></div><h2>Designed for a safer campus</h2><p>Every session stays anonymous by default. Automated safety signals watch for harmful content, while quick report and skip controls keep you in charge.</p><div className="modal-rule"><Check size={16} /> Open matching for everyone</div><div className="modal-rule"><Check size={16} /> No recording by default</div><div className="modal-rule"><Check size={16} /> Fast human review path</div><button className="primary-button modal-button" onClick={() => setShowSafety(false)}>Got it</button></div></div>}
     </main>
   );
